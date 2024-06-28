@@ -6,11 +6,18 @@ class Posting:
         self.term_freq = term_freq
         self.term_positions: list[int] = term_positions
 
+    def __repr__(self) -> str:
+        return str(self.__dict__)
+
 
 class IndexItem:
-    def __init__(self, df: int, postings_list: list[Posting]) -> None:
+    def __init__(self, df: int, tf: int, postings_list: list[Posting]) -> None:
         self.df = df
+        self.tf = tf
         self.postings = postings_list
+
+    def __repr__(self) -> str:
+        return str(self.__dict__)
 
 
 class Index:
@@ -24,15 +31,28 @@ class Index:
 
     def add(self, k: str, p: Posting):
         if k not in self._index:
-            self._index[k] = IndexItem(1, [p])
-        self._index[k].postings.append(p)
+            self._index[k] = IndexItem(1, p.term_freq, [p])
+            return
         self._index[k].df += 1
+        self._index[k].tf += p.term_freq
+        self._index[k].postings.append(p)
 
     def has(self, k: str):
         return k in self._index
 
-    def get(self, k: str) -> IndexItem:
+    def get(self, k: str) -> IndexItem | None:
+        if k not in self._index:
+            return None
         return self._index[k]
+
+    def items(self):
+        return self._index.items()
+
+    def values(self):
+        return self._index.values()
+
+    def remove(self, k: str):
+        del self._index[k]
 
     def __repr__(self) -> str:
         return str(self.__dict__)
@@ -57,6 +77,17 @@ class DatasetDocument:
         self.url = url
         self.tokens: list[DatasetDocumentToken] = []
         self.category = category
+        self.vector: list[tuple[str, float]]
+
+    def __repr__(self) -> str:
+        return str(self.__dict__)
+
+
+class QueryResult:
+    def __init__(self, id: str, title: str, url: str) -> None:
+        self.id = id
+        self.title = title
+        self.url = url
 
     def __repr__(self) -> str:
         return str(self.__dict__)

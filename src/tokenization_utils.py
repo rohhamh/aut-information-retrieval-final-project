@@ -1,29 +1,24 @@
 import re
 from hazm import Normalizer, Stemmer
 
+normalizer = Normalizer(
+    # correct_spacing breaks emails, it's initially avoided and will be applied again during tokenization
+    correct_spacing=False,
+)
+correct_spacing = Normalizer().correct_spacing
 
 def get_string_tokens(text: str):
-    tokens, tokens_positions = tokenize(normalize(text))
+    normalized_text = normalize(text)
+    tokens, tokens_positions = tokenize(normalized_text)
     stemmed_tokens = stem(tokens)
     tokens_counts, tokens_positions = merge_positional_indices(
         tokens, stemmed_tokens, tokens_positions
     )
-    return stemmed_tokens, tokens_counts, tokens_positions
+    return tokens_counts, tokens_positions
 
 
 def normalize(text: str):
-    n = Normalizer(
-        # correct_spacing breaks emails, it's initially avoided and will be applied again during tokenization
-        correct_spacing=False,
-        remove_diacritics=True,
-        remove_specials_chars=True,
-        decrease_repeated_chars=True,
-        persian_style=True,
-        persian_numbers=True,
-        unicodes_replacement=True,
-        seperate_mi=True,
-    )
-    return n.normalize(text)
+    return normalizer.normalize(text)
 
 
 def tokenize(text: str):
@@ -53,7 +48,6 @@ def tokenize(text: str):
     new_text = ""
     text = text.replace("\n", " ").replace("\t", " ")
     positions: dict[str, list[int]] = {}
-    spacing_corrector = Normalizer().correct_spacing
     for match in re.finditer(r"\S+", text):
         match_start, match_end = match.start(), match.end()
         new_text += text[new_text_last_idx:match_start]
@@ -64,12 +58,12 @@ def tokenize(text: str):
                 group = (
                     group[m.start() : m.end()]
                     + " "
-                    + delimiters_pattern.sub(r" \1 ", group[m.end() :])
+                    + delimiters_pattern.sub(r" \1 ", correct_spacing(group[m.end() :]))
                 )
                 applied_delimiter_pattern = True
         if not applied_delimiter_pattern:
+            group = correct_spacing(group)
             group = delimiters_pattern.sub(r" \1 ", group)
-        group = spacing_corrector(group)
         new_text += f" {group} "
         new_text_last_idx = match_end
         for t in group.split(" "):
