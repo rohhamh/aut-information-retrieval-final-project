@@ -8,8 +8,8 @@ class Posting:
 
 
 class IndexItem:
-    def __init__(self, idf: int, postings_list: list[Posting]) -> None:
-        self.idf = idf
+    def __init__(self, df: int, postings_list: list[Posting]) -> None:
+        self.df = df
         self.postings = postings_list
 
 
@@ -20,13 +20,13 @@ class Index:
 
     def set(self, k: str, ii: IndexItem):
         self._index[k] = ii
-        self._index[k].idf += len(ii.postings)
+        self._index[k].df += len(ii.postings)
 
     def add(self, k: str, p: Posting):
         if k not in self._index:
             self._index[k] = IndexItem(1, [p])
         self._index[k].postings.append(p)
-        self._index[k].idf += 1
+        self._index[k].df += 1
 
     def has(self, k: str):
         return k in self._index
