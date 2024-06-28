@@ -11,10 +11,11 @@ class Posting:
 
 
 class IndexItem:
-    def __init__(self, df: int, tf: int, postings_list: list[Posting]) -> None:
+    def __init__(self, df: int, tf: int, postings_list: list[Posting], champtions_list: list[Posting]) -> None:
         self.df = df
         self.tf = tf
         self.postings = postings_list
+        self.champtions_list: list[Posting] = champtions_list
 
     def __repr__(self) -> str:
         return str(self.__dict__)
@@ -32,7 +33,7 @@ class Index:
 
     def add(self, k: str, p: Posting):
         if k not in self._index:
-            self._index[k] = IndexItem(1, p.term_freq, [p])
+            self._index[k] = IndexItem(1, p.term_freq, [p], [])
             return
         self._index[k].df += 1
         self._index[k].tf += p.term_freq

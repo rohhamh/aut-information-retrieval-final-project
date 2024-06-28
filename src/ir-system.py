@@ -38,14 +38,25 @@ def index_document(index: Index, document: DatasetDocument):
         index.add(t.token, posting)
 
 
-def index_dataset(dataset: dict[str, DatasetDocument], remove_top_k: int = 50) -> tuple[Index, dict[str, int]]:
+def index_dataset(
+    dataset: dict[str, DatasetDocument],
+    champions_list_size: int | None,
+    remove_top_k: int = 50,
+) -> tuple[Index, dict[str, int]]:
     blake2 = hashlib.blake2b()
     blake2.update(repr(dataset).encode())
     index = Index(dataset_hash=blake2.digest())
     for document in dataset.values():
         index_document(index, document)
     removed_indices = remove_top_k_frequest_indices(index, remove_top_k)
+    if champions_list_size:
+        create_champions_list(index, champions_list_size)
     return index, removed_indices
+
+
+def create_champions_list(index: Index, size: int):
+    for v in index.values():
+        v.champtions_list = heapq.nlargest(size, v.postings, key=lambda x: x.term_freq)
 
 
 def get_dataset_document_vectors(dataset: dict[str, DatasetDocument]):
@@ -87,7 +98,9 @@ def vectorize_dataset(dataset: dict[str, DatasetDocument]):
                 document.tokens,
             )
         )
-        document_vectors[document.id] = list(filter(lambda v: v[1] > 0, document_vectors[document.id]))
+        document_vectors[document.id] = list(
+            filter(lambda v: v[1] > 0, document_vectors[document.id])
+        )
     return document_vectors
 
 
@@ -110,7 +123,13 @@ def get_vectors_similarity_score(
     return similarity
 
 
-def answer_query(query: str, k: int, index: Index, dataset: dict[str, DatasetDocument]) -> list[QueryResult]:
+def answer_query(
+    query: str,
+    k: int,
+    index: Index,
+    dataset: dict[str, DatasetDocument],
+    use_champions_list: bool = False,
+) -> list[QueryResult]:
     qtokens_counts, _ = get_string_tokens(query)
     qtokens = qtokens_counts.keys()
     qvector = list(
@@ -120,14 +139,23 @@ def answer_query(query: str, k: int, index: Index, dataset: dict[str, DatasetDoc
                 weigh_token(
                     qtokens_counts[qtoken],
                     index.get(qtoken).df if index.has(qtoken) else 0,
-                ),  # lt
+                ),  # ltc
             ),
             qtokens,
         )
     )
+    if use_champions_list:
+        documents = list(
+            set(
+                [champ for t in qtokens for champ in index.get(t).champtions_list if index.has(t)]
+            )
+        )
+        documents = [d.document_id for d in documents]
+    else:
+        documents = [d.id for d in dataset.values()]
     scores = [
-        (v.id, get_vectors_similarity_score(qvector, index.document_vectors[v.id]))
-        for v in dataset.values()
+        (id, get_vectors_similarity_score(qvector, index.document_vectors[id]))
+        for id in documents
     ]
     best_matches = [
         i for i in heapq.nlargest(k, scores, key=lambda s: s[1]) if i[1] > 0
@@ -150,8 +178,27 @@ if __name__ == "__main__":
         "--save-index", help="saves created index at given path", required=False
     )
     parser.add_argument("--index", help="use saved index", required=False)
-    parser.add_argument("--remove-top-indices", type=int, help="number of most frequent indices to remove", required=False)
-    parser.add_argument("--n-results", type=int, help="number of top results to show", required=False)
+    parser.add_argument(
+        "--remove-top-indices",
+        type=int,
+        help="number of most frequent indices to remove",
+        required=False,
+    )
+    parser.add_argument(
+        "--n-results", type=int, help="number of top results to show", required=False
+    )
+    parser.add_argument(
+        "--champions-list",
+        action="store_true",
+        help="use champions list",
+        required=False,
+    )
+    parser.add_argument(
+        "--champions-size",
+        type=int,
+        help="number of documents held as champions",
+        required=False,
+    )
 
     args = parser.parse_args()
 
@@ -167,7 +214,7 @@ if __name__ == "__main__":
             start = time.time()
             index = pickle.load(index_file)
             print(f"loading index took {time.time() - start}s")
-            document_vectors = index.document_vectors #type: ignore
+            document_vectors = index.document_vectors  # type: ignore
 
     if args.dataset:
         start = time.time()
@@ -180,8 +227,11 @@ if __name__ == "__main__":
 
     if not index:
         k = args.remove_top_indices or 50
+        csize = args.champions_size or 20
         start = time.time()
-        index, removed_indices = index_dataset(dataset, k)
+        index, removed_indices = index_dataset(
+            dataset, remove_top_k=k, champions_list_size=csize
+        )
         print(f"indexing took {time.time() - start}s")
         if document_vectors:
             index.document_vectors = document_vectors
@@ -193,5 +243,11 @@ if __name__ == "__main__":
 
     if args.query:
         k = args.n_results or 10
-        answer = answer_query(query=args.query, k=k, index=index, dataset=dataset)
+        answer = answer_query(
+            query=args.query,
+            k=k,
+            index=index,
+            dataset=dataset,
+            use_champions_list=args.champions_list,
+        )
         pprint(answer)
