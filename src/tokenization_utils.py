@@ -1,11 +1,12 @@
 import re
-from hazm import Normalizer, Stemmer
+from hazm import Lemmatizer, Normalizer, Stemmer
 
 normalizer = Normalizer(
     # correct_spacing breaks emails, it's initially avoided and will be applied again during tokenization
     correct_spacing=False,
 )
 correct_spacing = Normalizer().correct_spacing
+stemmer = Lemmatizer()
 
 def get_string_tokens(text: str):
     normalized_text = normalize(text)
@@ -80,8 +81,7 @@ def tokenize(text: str):
 
 
 def stem(terms: list[str]):
-    stemmer = Stemmer()
-    return list(map(stemmer.stem, terms))
+    return list(map(stemmer.lemmatize, terms))
 
 
 def merge_positional_indices(
@@ -94,6 +94,8 @@ def merge_positional_indices(
     for rt, st in zip(raw_tokens, stemmed_tokens):
         if st not in new_positions:
             new_positions[st] = []
+        if rt not in positions:
+            continue
         new_positions[st] += positions[rt]
     for t in new_positions.keys():
         new_positions[t] = sorted(list(set(new_positions[t])))

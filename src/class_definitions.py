@@ -24,6 +24,7 @@ class Index:
     def __init__(self, dataset_hash: bytes) -> None:
         self._index: dict[str, IndexItem] = dict()
         self.dataset_hash = dataset_hash
+        self.document_vectors: dict[str, list[tuple[str, float]]] = {}
 
     def set(self, k: str, ii: IndexItem):
         self._index[k] = ii

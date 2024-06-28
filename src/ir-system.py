@@ -7,6 +7,7 @@ import hashlib
 import heapq
 import numpy as np
 from tqdm import tqdm
+from pprint import pprint
 
 from class_definitions import (
     DatasetDocumentToken,
@@ -37,24 +38,24 @@ def index_document(index: Index, document: DatasetDocument):
         index.add(t.token, posting)
 
 
-def index_dataset(dataset: dict[str, DatasetDocument]) -> tuple[Index, dict[str, int]]:
+def index_dataset(dataset: dict[str, DatasetDocument], remove_top_k: int = 50) -> tuple[Index, dict[str, int]]:
     blake2 = hashlib.blake2b()
     blake2.update(repr(dataset).encode())
     index = Index(dataset_hash=blake2.digest())
     for document in dataset.values():
         index_document(index, document)
-    removed_indices = remove_top_k_frequest_indices(index, 15)
+    removed_indices = remove_top_k_frequest_indices(index, remove_top_k)
     return index, removed_indices
 
 
-def process_dataset(dataset: dict[str, DatasetDocument]):
+def get_dataset_document_vectors(dataset: dict[str, DatasetDocument]):
     for v in tqdm(dataset.values()):
         tokens_counts, tokens_positions = get_string_tokens(v.content)
         tokens = tokens_counts.keys()
         for token in tokens:
             count, positions = tokens_counts[token], tokens_positions[token]
             v.tokens.append(DatasetDocumentToken(token, positions, count))
-    vectorize_dataset(dataset)
+    return vectorize_dataset(dataset)
 
 
 def remove_top_k_frequest_indices(index: Index, k: int):
@@ -75,8 +76,9 @@ def weigh_token(token_freq: int, df: int) -> float:
 
 
 def vectorize_dataset(dataset: dict[str, DatasetDocument]):
+    document_vectors: dict[str, list[tuple[str, float]]] = dict()
     for document in dataset.values():
-        document.vector = list(
+        document_vectors[document.id] = list(
             map(
                 lambda dtoken: (
                     dtoken.token,
@@ -85,7 +87,8 @@ def vectorize_dataset(dataset: dict[str, DatasetDocument]):
                 document.tokens,
             )
         )
-        document.vector = list(filter(lambda v: v[1] > 0, document.vector))
+        document_vectors[document.id] = list(filter(lambda v: v[1] > 0, document_vectors[document.id]))
+    return document_vectors
 
 
 def get_vectors_similarity_score(
@@ -95,17 +98,21 @@ def get_vectors_similarity_score(
     common_terms = dv1.keys() & dv2.keys()
     if not common_terms:
         return 0
-    dv1 = {x: dv1[x] for x in common_terms}
-    dv2 = {x: dv2[x] for x in common_terms}
-    a = np.array(list(dv1.values()))
-    b = np.array(list(dv2.values()))
-    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+    dv1_new = {x: dv1[x] for x in common_terms}
+    dv2_new = {x: dv2[x] for x in common_terms}
+    a = np.array(list(dv1_new.values()))
+    b = np.array(list(dv2_new.values()))
+    norm_a = np.linalg.norm(list(dv1.values()))
+    norm_b = np.linalg.norm(list(dv2.values()))
+    if not norm_a or not norm_b:
+        return 0
+    similarity = np.dot(a, b) / (norm_a * norm_b)
+    return similarity
 
 
-def answer_query(query: str, k: int, index: Index, dataset: dict[str, DatasetDocument]):
+def answer_query(query: str, k: int, index: Index, dataset: dict[str, DatasetDocument]) -> list[QueryResult]:
     qtokens_counts, _ = get_string_tokens(query)
     qtokens = qtokens_counts.keys()
-    print(qtokens)
     qvector = list(
         map(
             lambda qtoken: (
@@ -113,21 +120,21 @@ def answer_query(query: str, k: int, index: Index, dataset: dict[str, DatasetDoc
                 weigh_token(
                     qtokens_counts[qtoken],
                     index.get(qtoken).df if index.has(qtoken) else 0,
-                ),  # ltc
+                ),  # lt
             ),
             qtokens,
         )
     )
     scores = [
-        (v.id, get_vectors_similarity_score(qvector, v.vector))
+        (v.id, get_vectors_similarity_score(qvector, index.document_vectors[v.id]))
         for v in dataset.values()
     ]
     best_matches = [
         i for i in heapq.nlargest(k, scores, key=lambda s: s[1]) if i[1] > 0
     ]
-    results = []
+    results: list[QueryResult] = []
     for m in best_matches:
-        id, score = m
+        id, _ = m
         document = dataset[id]
         results.append(QueryResult(document.id, document.title, document.url))
     return results
@@ -143,6 +150,8 @@ if __name__ == "__main__":
         "--save-index", help="saves created index at given path", required=False
     )
     parser.add_argument("--index", help="use saved index", required=False)
+    parser.add_argument("--remove-top-indices", type=int, help="number of most frequent indices to remove", required=False)
+    parser.add_argument("--n-results", type=int, help="number of top results to show", required=False)
 
     args = parser.parse_args()
 
@@ -150,17 +159,32 @@ if __name__ == "__main__":
         sys.stdout.write("invalid options")
         exit(1)
 
-    if args.dataset:
-        dataset = load_dataset(args.dataset)
-        start = time.time()
-        process_dataset(dataset)
-        print(f"processed dataset in {time.time() - start}s")
+    index: Index | None = None
+    document_vectors: dict[str, list[tuple[str, float]]] | None = None
 
     if args.index:
         with open(args.index, "rb") as index_file:
+            start = time.time()
             index = pickle.load(index_file)
-    else:
-        index, removed_indices = index_dataset(dataset)
+            print(f"loading index took {time.time() - start}s")
+            document_vectors = index.document_vectors #type: ignore
+
+    if args.dataset:
+        start = time.time()
+        dataset = load_dataset(args.dataset)
+        if not document_vectors:
+            document_vectors = get_dataset_document_vectors(dataset)
+            if index:
+                index.document_vectors = document_vectors
+        print(f"processed dataset in {time.time() - start}s")
+
+    if not index:
+        k = args.remove_top_indices or 50
+        start = time.time()
+        index, removed_indices = index_dataset(dataset, k)
+        print(f"indexing took {time.time() - start}s")
+        if document_vectors:
+            index.document_vectors = document_vectors
         print(f"removed_indices {removed_indices}")
 
     if args.save_index:
@@ -168,5 +192,6 @@ if __name__ == "__main__":
             pickle.dump(index, save_file, 0)
 
     if args.query:
-        answer = answer_query(query=args.query, k=10, index=index, dataset=dataset)
-        print(answer)
+        k = args.n_results or 10
+        answer = answer_query(query=args.query, k=k, index=index, dataset=dataset)
+        pprint(answer)
