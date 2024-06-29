@@ -59,14 +59,18 @@ def create_champions_list(index: Index, size: int):
         v.champtions_list = heapq.nlargest(size, v.postings, key=lambda x: x.term_freq)
 
 
-def get_dataset_document_vectors(dataset: dict[str, DatasetDocument]):
+def get_dataset_document_vectors(
+    dataset: dict[str, DatasetDocument], index: Index | None = None, tf_only: bool = False
+):
     for v in tqdm(dataset.values()):
         tokens_counts, tokens_positions = get_string_tokens(v.content)
         tokens = tokens_counts.keys()
         for token in tokens:
             count, positions = tokens_counts[token], tokens_positions[token]
             v.tokens.append(DatasetDocumentToken(token, positions, count))
-    return vectorize_dataset(dataset)
+    if index:
+        return vectorize_dataset(dataset, index, tf_only)
+    return vectorize_dataset(dataset, None, tf_only)
 
 
 def remove_top_k_frequest_indices(index: Index, k: int):
@@ -78,26 +82,31 @@ def remove_top_k_frequest_indices(index: Index, k: int):
     return removed_indices
 
 
-def weigh_token(token_freq: int, df: int) -> float:
+def weigh_token(token_freq: int, df: int, tf_only: bool = False) -> float:
     if token_freq == 0 or df == 0:
         return 0
+
     tf = 1 + np.log10(token_freq)
+    if tf_only:
+        return tf
     idf = np.log10(len(dataset) / df)
     return tf * idf
 
 
-def vectorize_dataset(dataset: dict[str, DatasetDocument]):
+def vectorize_dataset(dataset: dict[str, DatasetDocument], index: Index | None, tf_only: bool = False):
     document_vectors: dict[str, list[tuple[str, float]]] = dict()
     for document in dataset.values():
-        document_vectors[document.id] = list(
-            map(
-                lambda dtoken: (
+        def get_token_weight(dtoken):
+            df = index.get(dtoken.token).df if (index and index.has(dtoken.token)) else 1
+            return (
                     dtoken.token,
-                    weigh_token(dtoken.token_freq, 1),  # lnc
-                ),
-                document.tokens,
-            )
-        )
+                    weigh_token(
+                        dtoken.token_freq,
+                        df,
+                        tf_only,
+                    ),  # lnc
+                )
+        document_vectors[document.id] = list(map(get_token_weight, document.tokens))
         document_vectors[document.id] = list(
             filter(lambda v: v[1] > 0, document_vectors[document.id])
         )
@@ -145,9 +154,14 @@ def answer_query(
         )
     )
     if use_champions_list:
+        print('using champions_list')
         documents = list(
             set(
-                [champ for t in qtokens for champ in index.get(t).champtions_list if index.has(t)]
+                [
+                    champ for t in qtokens
+                    for champ in index.get(t).champtions_list
+                    if index.has(t)
+                ]
             )
         )
         documents = [d.document_id for d in documents]
@@ -162,9 +176,9 @@ def answer_query(
     ]
     results: list[QueryResult] = []
     for m in best_matches:
-        id, _ = m
+        id, score = m
         document = dataset[id]
-        results.append(QueryResult(document.id, document.title, document.url))
+        results.append(QueryResult(document.id, document.title, document.url, score))
     return results
 
 
@@ -199,6 +213,12 @@ if __name__ == "__main__":
         help="number of documents held as champions",
         required=False,
     )
+    parser.add_argument(
+        "--tf-only",
+        action='store_true',
+        help="use only tf for scoring",
+        required=False,
+    )
 
     args = parser.parse_args()
 
@@ -220,7 +240,10 @@ if __name__ == "__main__":
         start = time.time()
         dataset = load_dataset(args.dataset)
         if not document_vectors:
-            document_vectors = get_dataset_document_vectors(dataset)
+            if index:
+                document_vectors = get_dataset_document_vectors(dataset, index, tf_only=args.tf_only)
+            else:
+                document_vectors = get_dataset_document_vectors(dataset, tf_only=args.tf_only)
             if index:
                 index.document_vectors = document_vectors
         print(f"processed dataset in {time.time() - start}s")

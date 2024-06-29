@@ -86,10 +86,11 @@ class DatasetDocument:
 
 
 class QueryResult:
-    def __init__(self, id: str, title: str, url: str) -> None:
+    def __init__(self, id: str, title: str, url: str, score: float | None = None) -> None:
         self.id = id
         self.title = title
         self.url = url
+        self.score = score
 
     def __repr__(self) -> str:
         return str(self.__dict__)
